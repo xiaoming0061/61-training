@@ -162,9 +162,23 @@
 
 練習 4
 
+> 這題同樣「**先出計畫、你核准才動手**」（Plan Mode），且是**行為不變的重構**。
+
 1. 重構後 `dotnet test` 全綠
+   - ✅ 重構後 **44/44 全綠**（沿用重構前同一組測試，是行為不變的主要證據）。
 2. 我能說出這次重構「改善了什麼、沒有改變什麼」
+   - **改善了什麼**：`CreateOrderAsync` 原本把「前置整體驗證」與「逐項處理」全塞在同一個
+     方法，又長又難讀；抽成兩個具名私有方法——`ValidateRequest`（static 純函式，前置
+     四項驗證、短路只回第一個錯誤）與 `BuildOrderItemsAsync`（逐項驗證商品/庫存、扣庫存、
+     加明細、回累積錯誤），主方法瘦成「驗證 → 建立 → 存檔」骨架。
+   - **沒有改變什麼**：對外行為、四則錯誤訊息文字、錯誤累積順序、副作用時機（扣庫存與加
+     明細在同一 pass）、「失敗不呼叫 SaveChanges 故不落庫」全部原樣保留；未動
+     `CancelOrderAsync`、折扣方法或其他層。
 3. 我有在 code review 的角度看過 diff（不是 agent 說好就好）
+   - ✅ 重構前先出計畫核准；完成後用 code-reviewer 對 `HEAD` **逐行比對**確認等價（前置
+     四項檢查逐字相同、逐項迴圈 byte-for-byte、`customer!` 由 ValidateRequest 的 null
+     檢查保證安全），我也自己看過 diff 才 commit，不是只聽 agent 說好。
+   - commit：`155cb51`。
 
 ---
 
