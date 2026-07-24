@@ -64,12 +64,69 @@
 
 練習 2
 
-1. 三個 bug 我都先在頁面上重現過，才開始找程式
-2. 我給 agent 的資訊包含具體觀察（頁碼／金額數字／庫存數字），而不是只貼客訴原文
-3. 每個修復都回到頁面驗證過症狀消失
-4. 每個 bug 都補了一個回歸測試，`dotnet test` 全綠
-5. 三個獨立 commit，message 說明症狀與根因
-6. （思考題）為什麼原本的測試沒抓到這三個 bug？
+> 這次採「**agent 定位 + 測試重現**」流程：沒有先在頁面上手動點，而是由 agent 從
+> Controller 往下追到 Service／Repository 定位根因，並在動手修之前先寫一個
+> 「修復前會紅、修復後才綠」的回歸測試來重現每個 bug；驗證靠 `dotnet test` 全綠
+> 加 code-reviewer 複查。**頁面實測尚未做（待補）。**
+
+### 排查過程（三個 bug）
+
+**Bug 1 — 訂單列表分頁 off-by-one**（commit `785ff73`）
+
+- 症狀：新建的訂單在第一頁找不到、要翻到後面；分頁最後一頁常常空白。
+- 定位：`OrdersController.Index` → `OrderService.GetOrdersAsync` → `OrderRepository.GetPagedAsync`。
+- 根因：`page` 是 1-based，卻用 `Skip(page * pageSize)`。page=1 時 Skip 掉最新一整頁
+  （新訂單看不到），最後一頁 Skip 超過總筆數（空白）。
+- 修法：改成 `Skip((page - 1) * pageSize)`（單行）。
+- 回歸測試：`GetOrders_FirstPage_ReturnsNewestOrdersAndIsFull`（第一頁塞滿 20 筆、
+  首筆為最新）、`GetOrders_LastPage_IsNotEmpty`（25 筆時第 2 頁應有 5 筆）。修復前紅、修復後綠。
+
+**Bug 2 — Gold 會員總額雙重折扣**（commit `66f59d4`）
+
+- 症狀：Gold 會員新訂單應付總額比手算少一截（原價 1000 × 1 顯示 810，應為 900），Silver 正常。
+- 定位：`OrderService.CreateOrderAsync` 建單邏輯 + `CalculateTotal`。
+- 根因：CreateOrderAsync 針對 Gold 先把折扣套進 `UnitPriceSnapshot`（存成 900），
+  `CalculateTotal` 又在總額上再折一次（×0.9），Gold 變成 0.9×0.9=0.81；Silver 沒這段特例。
+  也違反「會員折扣在訂單總額上折抵一次」的領域規則。
+- 修法：移除 Gold 特例，snapshot 一律存下單當下原價，折扣統一由 `CalculateTotal` 套一次；
+  三種等級走同一條路徑。
+- 回歸測試：`CreateOrder_GoldCustomer_SnapshotsOriginalPriceAndDiscountsTotalOnce`
+  （驗 snapshot=1000 且總額=900）。修復前紅、修復後綠。
+
+**Bug 3 — 取消訂單未加回庫存**（commit `bb2afc5`）
+
+- 症狀：庫存跟盤點對不上，反覆「建單 → 取消」後庫存只減不還。
+- 定位：`OrderService.CancelOrderAsync`。
+- 根因：先執行 `order.Status = Cancelled`，接著才判斷 `if (Status == Pending || Confirmed)`
+  決定是否加回庫存——狀態既已被改成 Cancelled，該判斷永遠為 false，加回庫存的迴圈從不執行。
+- 修法：把 `order.Status = Cancelled` 移到加回庫存迴圈之後，讓判斷依「取消前」狀態評估。
+- 回歸測試：`CancelOrder_ActiveOrder_RestoresProductStock`（Theory：Pending / Confirmed，
+  建單扣庫存 10→7、取消後應加回 10）。修復前紅、修復後綠。
+
+### 自我驗證
+
+1. **重現方式**：這次沒有先在頁面手動重現，而是定位根因後**先寫一個「修復前會紅」的
+   回歸測試**來重現每個 bug（三個都確認修復前紅、修復後綠）。頁面實測待補。
+2. **給 agent 的是具體現象而非客訴原文**：頁碼（第一頁／最後一頁）、金額（1000 → 應 900、
+   實顯 810）、庫存數字（10 → 7 → 應回 10）。
+3. **症狀消失的驗證**：以回歸測試（紅 → 綠）＋ code-reviewer 複查確認；頁面實測待補。
+4. 每個 bug 都補了回歸測試，`dotnet test` 全綠（**33/33**）。✅
+5. 三個獨立 commit（`785ff73` / `66f59d4` / `bb2afc5`），message 用「症狀 → 根因 → 修法」
+   格式，各自只含原始碼 ＋ 對應測試兩檔。✅
+6. **（思考題）為什麼原本的測試沒抓到這三個 bug？**
+   共同原因：**既有測試只斷言「最顯眼的主要輸出」，沒覆蓋 bug 所在的次要效果與整合路徑。**
+   - **Bug 1**：`GetOrders_ReportsTotalCountAndTotalPages` 只驗 `TotalCount`／`TotalPages`，
+     這兩個值來自 `CountAsync()` 與公式、**與 `Skip` 無關**，所以分頁算錯也照過；而
+     `GetOrders_WithStatusFilter` 用 `Assert.All(result.Items, …)`——**空集合上 `Assert.All`
+     恆為真**，bug 讓該頁回空反而讓斷言「假通過」。沒有任何測試斷言「某一頁實際有哪些／幾筆」。
+   - **Bug 2**：`CalculateTotal_AppliesTierDiscountOnSubtotal` 是用**手動塞好原價 snapshot**
+     的 Order 單獨測 `CalculateTotal`；`CreateOrder_SnapshotsCurrentUnitPrice` 用的是
+     **Standard 客戶**（打不到 Gold 特例）。兩半各自測都對，但沒有測「CreateOrderAsync + Gold
+     + CalculateTotal」串起來的整合路徑，雙重折扣就從縫隙漏掉。
+   - **Bug 3**：`CancelOrder_ActiveOrder_SetsStatusCancelled` 只斷言結果 `Status == Cancelled`，
+     **從沒檢查取消後的 `Product.StockQuantity`**——庫存還原這個副作用完全在測試視野之外。
+   - 一句話：測試測了「該回傳什麼」，卻沒測「順帶改了什麼、整條路走完對不對」，
+     bug 就活在**沒被斷言的維度**裡。
 
 練習 3
 
