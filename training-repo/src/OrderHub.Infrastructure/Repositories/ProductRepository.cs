@@ -23,5 +23,22 @@ public class ProductRepository : IProductRepository
     public Task<Product?> GetByIdAsync(int id) =>
         _db.Products.FirstOrDefaultAsync(p => p.Id == id);
 
+    public async Task<IReadOnlyList<Product>> GetLowStockActiveAsync(int threshold) =>
+        await _db.Products
+            .Where(p => p.IsActive && p.StockQuantity < threshold)
+            .OrderBy(p => p.StockQuantity)
+            .ToListAsync();
+
+    public async Task<IReadOnlyDictionary<int, int>> GetSoldQuantitiesSinceAsync(DateTime since)
+    {
+        var rows = await _db.OrderItems
+            .Where(i => i.Order!.CreatedAt >= since && i.Order.Status != OrderStatus.Cancelled)
+            .GroupBy(i => i.ProductId)
+            .Select(g => new { ProductId = g.Key, Sold = g.Sum(x => x.Quantity) })
+            .ToListAsync();
+
+        return rows.ToDictionary(r => r.ProductId, r => r.Sold);
+    }
+
     public Task SaveChangesAsync() => _db.SaveChangesAsync();
 }
