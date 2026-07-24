@@ -37,6 +37,26 @@ public class OrderServiceCreateTests
     }
 
     [Fact]
+    public async Task CreateOrder_GoldCustomer_SnapshotsOriginalPriceAndDiscountsTotalOnce()
+    {
+        using var db = TestSetup.CreateContext();
+        var service = TestSetup.CreateOrderService(db);
+        var customer = TestSetup.AddCustomer(db, CustomerTier.Gold);
+        var product = TestSetup.AddProduct(db, unitPrice: 1000m);
+
+        var result = await service.CreateOrderAsync(customer.Id, new[] { new NewOrderLine(product.Id, 1) });
+        Assert.True(result.Success);
+
+        // 快照應存原價，不預先打折（修復前 Gold 會被存成 900）
+        Assert.Equal(1000m, result.Value!.Items.Single().UnitPriceSnapshot);
+
+        // 依 Details 頁流程重新載入後算總額：折扣只在總額套一次 → 1000 × 0.9 = 900
+        // 修復前雙重打折（0.9 × 0.9）會得到 810
+        var reloaded = await service.GetOrderAsync(result.Value.Id);
+        Assert.Equal(900m, service.CalculateTotal(reloaded!));
+    }
+
+    [Fact]
     public async Task CreateOrder_DecrementsProductStock()
     {
         using var db = TestSetup.CreateContext();
