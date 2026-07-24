@@ -41,6 +41,42 @@ public class OrderServiceQueryTests
     }
 
     [Fact]
+    public async Task GetOrders_FirstPage_ReturnsNewestOrdersAndIsFull()
+    {
+        using var db = TestSetup.CreateContext();
+        var service = TestSetup.CreateOrderService(db);
+        var customer = TestSetup.AddCustomer(db);
+
+        // 25 筆訂單，CreatedAt 遞減（i=0 為最新），共 2 頁（pageSize 20）
+        for (var i = 0; i < 25; i++)
+            db.Orders.Add(new Order { CustomerId = customer.Id, Status = OrderStatus.Pending, CreatedAt = DateTime.UtcNow.AddMinutes(-i) });
+        db.SaveChanges();
+
+        var page1 = await service.GetOrdersAsync(1, 20, null);
+
+        // 第一頁應塞滿 20 筆，且第一筆是最新（CreatedAt 最大）
+        Assert.Equal(20, page1.Items.Count);
+        Assert.Equal(db.Orders.Max(o => o.CreatedAt), page1.Items[0].CreatedAt);
+    }
+
+    [Fact]
+    public async Task GetOrders_LastPage_IsNotEmpty()
+    {
+        using var db = TestSetup.CreateContext();
+        var service = TestSetup.CreateOrderService(db);
+        var customer = TestSetup.AddCustomer(db);
+
+        // 25 筆訂單 → pageSize 20 共 2 頁，最後一頁應有 5 筆
+        for (var i = 0; i < 25; i++)
+            db.Orders.Add(new Order { CustomerId = customer.Id, Status = OrderStatus.Pending, CreatedAt = DateTime.UtcNow.AddMinutes(-i) });
+        db.SaveChanges();
+
+        var lastPage = await service.GetOrdersAsync(2, 20, null);
+
+        Assert.Equal(5, lastPage.Items.Count);
+    }
+
+    [Fact]
     public async Task GetCustomerOrders_ReturnsOnlyThatCustomersOrders()
     {
         using var db = TestSetup.CreateContext();
