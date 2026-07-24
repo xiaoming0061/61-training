@@ -130,12 +130,35 @@
 
 練習 3
 
+> 這題用「**先計畫、你核准後才實作**」的 Plan Mode 流程做，並在功能完成後**起真實網站
+> （localhost:5150 + 本機 SQL Server）逐條頁面實測**，不是只靠測試。
+
 1. `/Products/LowStock` 不帶參數 → 門檻 10 的結果；帶 `?threshold=3` → 結果隨之改變
+   - ✅ 真實頁面實測：不帶參數時輸入框預設 `value="10"`、列出庫存 < 10 的商品；
+     `?threshold=3` 結果隨門檻改變（curl 打端點皆 HTTP 200）。
 2. `?threshold=0`、`?threshold=-1` → 頁面顯示驗證錯誤，不是 500
+   - ✅ `0`、`-1`、甚至 `abc`（非數字）都回 **HTTP 200（非 500）**，顯示驗證訊息
+     「門檻必須大於 0」，且驗證失敗時表格隱藏。機制：`LowStockViewModel.Threshold`
+     用 `int? + [Range(1, int.MaxValue)]`，controller `!ModelState.IsValid` 回表單。
+   - ⚠️ 教訓：我第一版用 grep 檢查頁面時誤報「驗證訊息不見」，實際是 Razor 把中文輸出成
+     HTML 實體（`&#x9580;…`=門），逐字檢視 HTML 才確認訊息有正常渲染——再次印證「agent
+     的話（含它自己寫的檢查腳本）要回一手來源人工核對」。
 3. 售出數量欄位排除了 Cancelled 訂單（可用一筆已取消的訂單驗證）
+   - ✅ 測試 `GetLowStock_SoldLast30Days_ExcludesCancelledAndOlderThan30Days`：
+     -10 天/Confirmed/qty5（計入）、-10 天/Cancelled/qty7（排除）、-40 天/Confirmed/qty9
+     （排除，超過 30 天）、-2 天/Shipped/qty3（計入）→ 售出量 = 8。
 4. 停售（已停售 badge）商品不出現在列表
+   - ✅ 測試 `GetLowStock_ExcludesInactiveProducts`（active stock4 出現、inactive stock2
+     不出現）；repository 用 `Where(p => p.IsActive && p.StockQuantity < threshold)`。
 5. 程式分層與命名跟既有的 Products 功能一致（請 agent 自我 review 一次，並自己確認）
+   - ✅ EF 只在 repository、「近 30 天」業務窗口在 Core service、Controller 薄轉接 +
+     ViewModel mapping、View 綁 ViewModel、驗證用 DataAnnotations。經 code-reviewer 複查
+     通過（無阻擋問題），我逐項確認；並依 review 建議修掉「驗證失敗仍顯示空表提示」的
+     誤導、把門檻預設抽成 `DefaultThreshold` 常數。
 6. 至少 3 個新測試，`dotnet test` 全綠
+   - ✅ 服務層 4 個（門檻過濾+升冪、排除停售、近 30 天排除 Cancelled、無銷售回 0）+
+     驗證層（ViewModel `[Range]` Theory 5 案例 + controller 2 個）；**44/44 全綠**。
+   - commit：`bf96f59`（功能）、`5d86c9c`（threshold 驗證測試）。
 
 練習 4
 
