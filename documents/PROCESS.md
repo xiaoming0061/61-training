@@ -3,7 +3,7 @@
 > 一個原則：**寫「具體發生的事」，不寫感想文。**
 > 貼上當時真實的 prompt、真實的數字、真實的錯誤訊息——三個月後的你（和你的同事）才用得上。
 
-#### 使用的 agent 與模型：
+#### 使用的 agent 與模型：Claude Code（模型：Claude Opus 4.8，1M context）
 
 ---
 
@@ -13,25 +13,36 @@
 
 （開工前你把任務拆成哪幾步？實際做的時候順序有變嗎？為什麼變？）
 
--
+- 開工前拆成四步：① 全庫掃描、讀 `documents/` 搞懂這份功課要做什麼 → ② 精讀 `training-repo` 原始碼（Services / Domain / Repositories / Controllers / DbSeeder）建立專案理解 → ③ 產出練習 1 的 agent 設定檔（`CLAUDE.md` + `.claude/`）→ ④ commit。
+- 實際順序有變：本來想讀完就直接產設定檔，改成在第 ② 與第 ③ 步之間**先問兩個關鍵決策**——設定檔放 `training-repo/` 還是 repo 根目錄、要生成全套還是只要核心。原因：設定檔的**位置**會決定 hooks／權限在哪個 cwd 啟動 Claude Code 才生效，先問清楚比事後搬檔省事。
 
 ### 2. AI 幫上大忙的地方
 
 （哪件事 agent 做得又快又好？**貼上當時的提問原文**，說明為什麼這樣問有效。）
 
--
+- 「讀懂陌生專案」這件事又快又好。當時的提問原文：
+  > 帮我扫描下整个文件然后整理出这份功课是要做什么
+  接著：
+  > 帮我这里出项目的所有功能，然后生成所需要的文件。请记得任何关键性的问题，都先问我确认下
+- 為什麼有效：第一句把 agent 當成「讀懂專案」的工具，讓它一次把散在 `documents/` 的四個練習、和 `training-repo` 的三層架構整併成一張地圖；第二句加了「**關鍵問題先確認**」這條護欄，逼它在動手前把決策點（放檔位置、生成範圍）攤出來問我，而不是自作主張產一堆要返工的檔。
 
 ### 3. AI 誤導我的地方，與我如何發現
 
 （agent 說錯／改錯／過度自信的時刻。你靠什麼抓到——對照程式碼？頁面實測？跑測試？）
 
--
+- agent 一開始傾向直接沿用 `agent-configuration.md` 範例裡的 CLAUDE.md 文字，把建單流程講得比實際「乾淨」。我靠**逐檔讀原始碼**核對（`OrderService.cs`、`OrderRepository.cs`）才發現摘要抹掉了細節：`CreateOrderAsync` 其實是在同一個迴圈裡**邊驗證邊扣 `StockQuantity`**、把 per-line 錯誤累積進 `errors`，最後才統一裁決，而不是我描述的那種「先全部驗完再動手」。
+- 教訓：agent（以及它引用的範例文件）給你的是**摘要**，摘要天生會抹掉邊界條件；要判斷對不對，得回到一手來源——程式碼、頁面、測試。
 
 ### 4. 我會帶回日常工作的一招
 
 （一個具體、可複製的做法，不要寫「要多驗證」這種口號——寫出**操作步驟**。）
 
--
+- 「**先計畫、再放行**」四步操作：
+  1. 交任務時在 prompt 裡明講：「**任何關鍵決策先列出來問我，我確認前不要改任何檔案。**」
+  2. 讓 agent 先回一份計畫：要動哪些檔、每檔職責、有哪些決策點。
+  3. 我**逐條對照專案慣例**審這份計畫；看到「順手改 xxx / 一起重構 yyy」這種超出範圍的動作就要它拿掉。
+  4. 只有審過的計畫才放行實作。
+  （本次就是靠這招，在產出 7 個設定檔前先敲定「放 `training-repo/`、生成全套」兩個決策，沒有返工。）
 
 ## 自我驗證（做到哪個階段答哪題）
 
@@ -40,8 +51,16 @@
 練習 1
 
 1. 我能不看筆記說出三個專案（Web/Core/Infrastructure）各自的職責
+   - **OrderHub.Web**：MVC 進入層。Controller（保持薄，只轉接 service 結果 + 手寫 ViewModel mapping）、Razor View（綁 ViewModel）、`Helpers/DisplayHelper`。
+   - **OrderHub.Core**：商業邏輯核心。Domain models、Service 介面與實作（折扣、庫存、狀態轉移）、`Common`（`ServiceResult<T>`、`PagedResult<T>`）。**不依賴其他兩層**，Web 與 Infrastructure 都指向它。
+   - **OrderHub.Infrastructure**：資料存取。`OrderHubDbContext`、Repositories（**唯一**碰 EF Core 的地方）、Migrations、`DbSeeder`。
 2. 我核對過 agent 描述的建單流程，且**至少找出一處不精確或過度簡化的說法**
+   - 找到的過度簡化：我把 `CreateOrderAsync` 描述成一條乾淨的「校驗閘門順序」。對照 `OrderService.cs` 才發現不精確——per-line 的錯誤（商品停售、庫存不足）是**先累積進 `errors` 清單**、而且**在同一個迴圈裡就先把 `product.StockQuantity` 減掉**，最後才用 `errors.Count > 0` 統一判定成敗；只是失敗時不呼叫 `SaveChangesAsync`，記憶體裡的扣減才不會落庫。「邊驗邊改、最後統一裁決」這個細節被順序式描述簡化掉了。
 3. 我知道商業邏輯應該放在哪一層、新增頁面要動哪些地方
+   - 商業邏輯放 **Core 的 service**（透過 interface 注入）；只有 repository 碰 `DbContext`。
+   - 新增一頁大致的落點：Controller（薄轉接）→ Core service 介面 + 實作（邏輯）→ repository（EF 查詢）→ ViewModel → View → `_Layout.cshtml` 導覽列連結 → tests。（正好是練習 3 的六個落點。）
+
+> 補充（待我實測）：`agent-configuration.md` 裡權限／hooks 的驗證（讓它跑 `git push --force` 被 deny、`dotnet test` 直接放行、`dotnet ef database drop` 跳 ask、要求 TRUNCATE 被 hook 擋下、產生 `edit-log.txt`）尚未實測——需從 `training-repo/` 重開 session 才會載入設定，實測後再補結果。
 
 練習 2
 
@@ -72,3 +91,7 @@
 ## 附錄：值得留下的對話片段
 
 （貼 1–2 段最有代表性的 prompt 與回應**摘要**——不用貼全文，重點是「我怎麼問」和「它怎麼答」。）
+
+- **我怎麼問**：「出项目的所有功能，然后生成所需要的文件。请记得任何关键性的问题，都先问我确认下。」
+- **它怎麼答（摘要）**：先把 OrderHub 的三層職責、領域模型、7 個功能頁與商業規則整理成一張地圖；接著**停下來**用兩個選擇題問我「設定檔放 `training-repo/` 還是 repo 根目錄」「生成全套還是只要核心」；等我選完（放 `training-repo/`、全套）才動手產出 `CLAUDE.md` + `.claude/`（settings 權限與 hooks／code-reviewer 與 test-runner 子代理／fix-bug skill／兩個 hook 腳本）共 7 個檔並 commit。
+- **值得記住的點**：把「關鍵問題先確認」寫進 prompt，agent 就會在動手前把決策攤開來問，而不是先斬後奏產一堆要返工的檔。
