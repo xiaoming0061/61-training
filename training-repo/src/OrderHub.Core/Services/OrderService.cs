@@ -35,25 +35,51 @@ public class OrderService : IOrderService
     public async Task<ServiceResult<Order>> CreateOrderAsync(int customerId, IReadOnlyList<NewOrderLine> lines)
     {
         var customer = await _customerRepository.GetByIdAsync(customerId);
-        if (customer is null)
-            return ServiceResult<Order>.Fail("找不到指定的客戶");
 
-        if (lines is null || lines.Count == 0)
-            return ServiceResult<Order>.Fail("訂單至少需要一項商品");
+        var requestError = ValidateRequest(customer, lines);
+        if (requestError is not null)
+            return ServiceResult<Order>.Fail(requestError);
 
-        if (lines.Any(l => l.Quantity <= 0))
-            return ServiceResult<Order>.Fail("商品數量必須大於 0");
-
-        if (lines.Select(l => l.ProductId).Distinct().Count() != lines.Count)
-            return ServiceResult<Order>.Fail("同一商品請勿重複加入，請調整數量即可");
-
-        var errors = new List<string>();
         var order = new Order
         {
-            CustomerId = customer.Id,
+            CustomerId = customer!.Id,   // ValidateRequest 已保證 customer 非 null
             Status = OrderStatus.Pending,
             CreatedAt = DateTime.UtcNow
         };
+
+        var errors = await BuildOrderItemsAsync(order, lines);
+        if (errors.Count > 0)
+            return ServiceResult<Order>.Fail(errors);
+
+        await _orderRepository.AddAsync(order);
+        await _orderRepository.SaveChangesAsync();
+
+        return ServiceResult<Order>.Ok(order);
+    }
+
+    // 前置整體驗證（短路，只回第一個錯誤）：客戶存在、明細非空、數量、無重複商品。
+    private static string? ValidateRequest(Customer? customer, IReadOnlyList<NewOrderLine> lines)
+    {
+        if (customer is null)
+            return "找不到指定的客戶";
+
+        if (lines is null || lines.Count == 0)
+            return "訂單至少需要一項商品";
+
+        if (lines.Any(l => l.Quantity <= 0))
+            return "商品數量必須大於 0";
+
+        if (lines.Select(l => l.ProductId).Distinct().Count() != lines.Count)
+            return "同一商品請勿重複加入，請調整數量即可";
+
+        return null;
+    }
+
+    // 逐項驗證商品是否存在/上架、庫存是否足夠；通過就扣庫存並加入明細。
+    // 回傳累積的 per-line 錯誤；有錯誤時呼叫端不會 SaveChanges，記憶體扣減不落庫。
+    private async Task<List<string>> BuildOrderItemsAsync(Order order, IReadOnlyList<NewOrderLine> lines)
+    {
+        var errors = new List<string>();
 
         foreach (var line in lines)
         {
@@ -81,13 +107,7 @@ public class OrderService : IOrderService
             });
         }
 
-        if (errors.Count > 0)
-            return ServiceResult<Order>.Fail(errors);
-
-        await _orderRepository.AddAsync(order);
-        await _orderRepository.SaveChangesAsync();
-
-        return ServiceResult<Order>.Ok(order);
+        return errors;
     }
 
     public async Task<ServiceResult<Order>> CancelOrderAsync(int id)
