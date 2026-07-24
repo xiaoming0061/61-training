@@ -60,14 +60,14 @@
    - 商業邏輯放 **Core 的 service**（透過 interface 注入）；只有 repository 碰 `DbContext`。
    - 新增一頁大致的落點：Controller（薄轉接）→ Core service 介面 + 實作（邏輯）→ repository（EF 查詢）→ ViewModel → View → `_Layout.cshtml` 導覽列連結 → tests。（正好是練習 3 的六個落點。）
 
-> 補充（待我實測）：`agent-configuration.md` 裡權限／hooks 的驗證（讓它跑 `git push --force` 被 deny、`dotnet test` 直接放行、`dotnet ef database drop` 跳 ask、要求 TRUNCATE 被 hook 擋下、產生 `edit-log.txt`）尚未實測——需從 `training-repo/` 重開 session 才會載入設定，實測後再補結果。
+> 補充（已實測）：`.claude` 的 hooks 確認運作——PostToolUse 每次 Edit/Write 都寫入 `.claude/hooks/edit-log.txt`；PreToolUse 對含 `TRUNCATE`／`DROP` 的指令回「Action denied」擋下。`dotnet test` 全程未跳權限確認（allow 規則生效）。`git push --force`（deny）與 `dotnet ef database drop`（ask）因不宜實際觸發未逐一觸發測試，規則設定已就位。
 
 練習 2
 
 > 這次採「**agent 定位 + 測試重現**」流程：沒有先在頁面上手動點，而是由 agent 從
 > Controller 往下追到 Service／Repository 定位根因，並在動手修之前先寫一個
 > 「修復前會紅、修復後才綠」的回歸測試來重現每個 bug；驗證靠 `dotnet test` 全綠
-> 加 code-reviewer 複查。**頁面實測尚未做（待補）。**
+> 加 code-reviewer 複查；三個修復事後也已在頁面實測確認症狀消失。
 
 ### 排查過程（三個 bug）
 
@@ -106,10 +106,10 @@
 ### 自我驗證
 
 1. **重現方式**：這次沒有先在頁面手動重現，而是定位根因後**先寫一個「修復前會紅」的
-   回歸測試**來重現每個 bug（三個都確認修復前紅、修復後綠）。頁面實測待補。
+   回歸測試**來重現每個 bug（三個都確認修復前紅、修復後綠）。事後也已在頁面確認修復後症狀消失。
 2. **給 agent 的是具體現象而非客訴原文**：頁碼（第一頁／最後一頁）、金額（1000 → 應 900、
    實顯 810）、庫存數字（10 → 7 → 應回 10）。
-3. **症狀消失的驗證**：以回歸測試（紅 → 綠）＋ code-reviewer 複查確認；頁面實測待補。
+3. **症狀消失的驗證**：以回歸測試（紅 → 綠）＋ code-reviewer 複查確認，並已回頁面實測確認症狀消失。
 4. 每個 bug 都補了回歸測試，`dotnet test` 全綠（**33/33**）。✅
 5. 三個獨立 commit（`785ff73` / `66f59d4` / `bb2afc5`），message 用「症狀 → 根因 → 修法」
    格式，各自只含原始碼 ＋ 對應測試兩檔。✅
