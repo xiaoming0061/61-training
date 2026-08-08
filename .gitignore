@@ -17,6 +17,10 @@ TestResults/
 
 # Node (not used, but just in case)
 node_modules/
+package-lock.json
+
+# Playwright MCP snapshot artifacts
+.playwright-mcp/
 
 # Local settings that should not be shared
 *.local.json
