@@ -182,6 +182,30 @@
 
 ### 第二階段 — 自建 MCP Server（activity-2-custom-mcp）
 
+練習 0 — 先當使用者：接一個現成的 MCP（Playwright）
+
+- 用 `claude mcp add playwright -- npx @playwright/mcp@latest` 接上瀏覽器自動化（`claude mcp
+  list` 顯示 `playwright: npx @playwright/mcp@latest - ✔ Connected`）。
+- 任務：「建立一筆新訂單，截圖給我看結果頁」。agent 自己跑完整流程：`browser_navigate` 開
+  `/Orders/Create` → `browser_snapshot` 取得表單元素 ref → `browser_select_option` 選客戶
+  （陳志明·金卡會員）與商品（SKU-1001 極光 無線滑鼠，單價 NT$1,420）→ `browser_click` 送出
+  → 自動導到 `/Orders/Details/201` → `browser_take_screenshot` 存成 `order-201-created.png`。
+- 結果核對：訂單 #201，小計 NT$1,420、會員折扣 10%（-142）、應付總額 NT$1,278——金卡 9 折
+  算對；整段操作我沒有插手任何一次點擊。
+
+**對比活動 1 練習 2（人工重現 bug）**：
+
+- 那時的流程是「我先在頁面上手動點」：開 `/Orders`、記下新訂單編號、翻頁找、記下金額數字——
+  每個 bug 的重現步驟（開哪個頁、點哪顆按鈕、記哪個數字）都要我自己動手做完，才能把「具體
+  現象」交給 agent 去定位根因。
+- 這次同一類「操作瀏覽器」的動作，agent 靠 Playwright MCP 自己開瀏覽器、自己填表、自己送出、
+  自己截圖回報，我只下了一句「建立一筆新訂單，截圖給我看結果頁」，中間零手動點擊。
+- 差別的本質：活動 1 沒有這個工具時，agent 對瀏覽器裡實際發生的事完全沒有感知，只能靠我口述
+  現象；有了 Playwright MCP，`browser_snapshot` 讓 agent 拿到真實的 accessibility snapshot 當
+  「眼睛」，自己驗證操作結果（例如提交後真的導到了 `/Orders/Details/201`），不需要我在中間
+  當「眼睛和手」。代價：agent 現在能自己操作 UI 改資料，之後要它做危險操作（例如取消訂單）
+  時，人工確認的把關就更重要——這點在練習 4（`cancel_order`）具體碰到。
+
 練習 3 — 註冊給 agent，before/after 對照
 
 > 環境備註：這個 repo 的 git root 是 `61-training`（`training-repo` 是子目錄），但練習文件假設
