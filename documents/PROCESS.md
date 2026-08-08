@@ -189,7 +189,8 @@
 - 任務：「建立一筆新訂單，截圖給我看結果頁」。agent 自己跑完整流程：`browser_navigate` 開
   `/Orders/Create` → `browser_snapshot` 取得表單元素 ref → `browser_select_option` 選客戶
   （陳志明·金卡會員）與商品（SKU-1001 極光 無線滑鼠，單價 NT$1,420）→ `browser_click` 送出
-  → 自動導到 `/Orders/Details/201` → `browser_take_screenshot` 存成 `order-201-created.png`。
+  → 自動導到 `/Orders/Details/201` → `browser_take_screenshot` 存成 `order-201-created.png`（見
+  [截圖](assets/activity-2/order-201-created.png)）。
 - 結果核對：訂單 #201，小計 NT$1,420、會員折扣 10%（-142）、應付總額 NT$1,278——金卡 9 折
   算對；整段操作我沒有插手任何一次點擊。
 
