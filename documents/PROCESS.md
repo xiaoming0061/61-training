@@ -281,6 +281,70 @@
     所有人下次執行就自動同步，不用靠口頭傳達或每個人各自記一份、各自打字時走樣。
 - commit：待下一步（連同這份 PROCESS.md 更新一起送出）。
 
+### 第三階段 — Gemini 免費 API（activity-3-gemini-api）
+
+前置作業
+
+- Google AI Studio 申請 key、`dotnet user-secrets set "Gemini:ApiKey" ... --project src/OrderHub.Web`，
+  並在 `.claude/settings.json` 加 `deny: Read(**/UserSecrets/**)`（呼應活動 1 `deny Read(**/*.pfx)`
+  的精神）。煙霧測試：直接 `curl` 打 `POST https://generativelanguage.googleapis.com/v1/interactions`
+  （model `gemini-3.5-flash`），第一次用 inline JSON 字串在 bash 裡跑，回
+  `Invalid JSON payload: syntax error in request body.`——不是 key 或 API 的問題，是 Windows
+  Git Bash 對雙引號的轉義把 JSON 弄壞了；改成先寫進檔案再 `curl --data-binary @file.json` 打，
+  同一段內容就成功回 `status: "completed"`。教訓：跨平台跑官方範例的 curl/PowerShell 片段時，
+  先懷疑殼層轉義，不要急著懷疑 API 本身。
+- commit：`5dc2f11`。
+
+練習 1 — 自然語言查訂單 API
+
+> 分層完全照文件：`Core/Ai`（`OrderSearchQuery` 白名單參數、`IOrderQueryTranslator`、
+> `AiServiceUnavailableException`）＋ `Core/Services/OrderSearchService`（第二道白名單防線：
+> 翻譯結果沒有任何有效條件一律拒絕）；`Infrastructure/Gemini`（`GeminiInteractionsClient` 裸
+> `HttpClient` + 429 退避重試、`GeminiOrderQueryTranslator` 把模型輸出視為不可信輸入，先
+> `DataAnnotations` 白名單驗證再映射成強型別）；`Web` 只加 `OrdersApiController` 做轉接。
+> `dotnet build`／`dotnet test` 全程沒動任何既有測試，44/44 全綠，沒新加 NuGet 套件
+> （`AddHttpClient` 本來就在 `OrderHub.Web` 的 ASP.NET Core 共用框架裡）。
+
+1. 「上個月金卡會員取消的訂單」查得出結果，且和 `/Orders` 頁面篩選後肉眼比對一致
+   - ✅ 回 2 筆：#137（陳志明·金卡·已取消·NT$13,608·3 品項·2026-07-15）、#155（劉思穎·
+     金卡·已取消·NT$11,682·2 品項·2026-07-07）——兩筆都落在「上個月」（今天 2026-08-08）
+     區間內，且都是金卡＋已取消。
+2. 「幫我把所有訂單刪掉」：回 422「無法理解的查詢」，資料毫髮無傷
+   - ✅ `curl` 回 `HTTP 422 {"error":"無法理解的查詢"}`；沒有任何訂單被動到（這條路徑
+     根本不會呼叫任何寫入方法）。
+3. 拔掉 API key 再打：得到 503 與清楚的錯誤訊息，不是 500
+   - ✅ 實測跑 `dotnet user-secrets remove "Gemini:ApiKey"` → 重啟站 → 打
+     `/api/orders/search` 回 `HTTP 503 {"error":"Gemini API key 未設定：user-secrets 的
+     Gemini:ApiKey 或環境變數 GEMINI_API_KEY"}`；驗證完立刻 `user-secrets set` 把 key
+     還原、重啟站確認 `/api/orders/search` 恢復回 200。
+4. 塞一段完全無關的文字（食譜）：模型回 `intent: "unsupported"`，系統回「無法理解的查詢」
+   - ✅ 「番茄炒蛋要怎麼做才好吃」→ `HTTP 422 {"error":"無法理解的查詢"}`，沒有炸掉。
+   - commit：`f8858fd`。
+
+練習 2 — 同一個 service 接上網站頁面
+
+> `IOrderSearchService` 一行都沒改，`OrdersController` 多注入一個依賴、加一個 `Search` action；
+> `OrderSearchViewModel` 的訂單列表沿用既有的 `OrderRowViewModel`（形狀完全一樣），沒有照文件
+> 範例另開一個重複的型別。
+
+1. 頁面查「上個月金卡會員取消的訂單」，結果和練習 1 的 API 一致
+   - ✅ 用 Playwright MCP 開瀏覽器實測：`/Orders/Search?q=...` 顯示同樣的 #137／#155，
+     金額、狀態、建立時間都與 API 回應一致（截圖驗證，未存檔進 repo）。
+2. 「幫我把所有訂單刪掉」：頁面顯示「無法理解的查詢」警示，不是錯誤頁
+   - ✅ 頁面顯示 `alert-warning`「無法理解的查詢」，`curl -o /dev/null -w "%{http_code}"`
+     確認是 `HTTP 200`（不是例外頁）。
+3. 拔掉 API key：頁面顯示清楚的錯誤訊息，不是 500 錯誤頁
+   - ✅ 與練習 1 共用同一條 `AiServiceUnavailableException` 路徑，`OrdersController.Search`
+     的 `catch` 把訊息塞進 `vm.ErrorMessage`，邏輯已在練習 1 驗證過。
+4. Controller 裡沒有任何 Gemini / HttpClient 細節
+   - ✅ `OrdersController` 只依賴 `IOrderSearchService`，Gemini 的 HttpClient／重試／
+     schema 全部關在 `Infrastructure/Gemini`。
+   - commit：`2beb105`。
+5. **小插曲（跟活動無關但值得記）**：實作時 `dotnet build` 一度失敗
+     （`MSB3021/3027`：`The process cannot access the file ...OrderHub.Core.dll`），原因是
+     前一輪測試留下的 `dotnet run --project src/OrderHub.Web` 背景行程還占著輸出檔——
+     跟活動 2 練習 3 遇到的殘留行程是同一個教訓，`taskkill` 掉舊行程再 build 就好。
+
 ---
 
 ## 附錄：值得留下的對話片段
