@@ -180,6 +180,36 @@
      檢查保證安全），我也自己看過 diff 才 commit，不是只聽 agent 說好。
    - commit：`155cb51`。
 
+### 第二階段 — 自建 MCP Server（activity-2-custom-mcp）
+
+練習 3 — 註冊給 agent，before/after 對照
+
+> 環境備註：這個 repo 的 git root 是 `61-training`（`training-repo` 是子目錄），但練習文件假設
+> Claude Code 是以 `training-repo`為專案根目錄啟動。第一次在 `61-training` root 下跑 `claude`
+> 時，`.mcp.json` 放在 `training-repo/.mcp.json` 不會被自動偵測到（`.claude/settings.local.json`
+> 當時是寫在 `61-training/.claude/`，證明專案 scope 綁在外層）。解法：改成直接在
+> `training-repo` 目錄下啟動 Claude Code（`--resume` 接回同一個對話），`.mcp.json` 就正確被
+> 偵測、`/mcp` 也能連上——不是繞路產生第二份設定檔。
+
+- **Before**（無 orderhub 工具）：問「哪些商品庫存低於 5？」，只能自己手寫 SQL 用
+  `sqlcmd` 查 `Products` 表，還要記得套「僅限 `IsActive = 1`」這條領域規則（沒有工具
+  description 提醒，忘記加這個條件也不會有人擋你）。
+  ```sql
+  SELECT Sku, Name, StockQuantity FROM Products
+  WHERE IsActive = 1 AND StockQuantity < 5 ORDER BY StockQuantity
+  ```
+- **After**（連上 orderhub、`/mcp` reconnect 後）：同一個問題，一次
+  `low_stock(threshold=5)` 工具呼叫完成，回傳結果與 Before 手寫 SQL 完全一致
+  （SKU-1048/1005/1023/1032/1014，庫存 2/3/3/4/4）。
+- **差異**：Before 要自己記得 schema、記得領域規則（哪些欄位、要不要排除停售商品）；
+  After 這些規則已經寫進工具的 `Description`／實作裡，agent 不需要「知道」規則，只要
+  「會用工具」。工具描述的品質直接決定答案對不對，這也是活動文件說的「Description
+  就是 UX」。
+- 遇到的小插曲：MCP server 曾因為前一次測試留下的殘留 `dotnet` 行程鎖住
+  `OrderHub.Core.dll`，造成 `claude mcp list` 顯示 `orderhub` connect 失敗
+  （`-32000 Connection closed`）；`taskkill` 掉殘留行程、重新 `dotnet build` 後才連得上。
+  教訓：MCP stdio server 掛掉時，先查是不是有殘留行程佔著 build 輸出檔。
+
 ---
 
 ## 附錄：值得留下的對話片段
