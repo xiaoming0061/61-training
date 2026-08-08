@@ -210,6 +210,52 @@
   （`-32000 Connection closed`）；`taskkill` 掉殘留行程、重新 `dotnet build` 後才連得上。
   教訓：MCP stdio server 掛掉時，先查是不是有殘留行程佔著 build 輸出檔。
 
+練習 4 — 會改資料的工具：cancel_order
+
+- 新增 `cancel_order` 工具，直接轉接既有的 `OrderService.CancelOrderAsync`，不重複實作
+  狀態檢查與庫存回補規則；標註 `Destructive = true, Idempotent = false`。順手把練習 1
+  的三個唯讀工具補標 `ReadOnly = true`（其實在練習 1 當時就已經標了）。
+- annotations 驗證（用腳本送 `tools/list` 確認，等同 Inspector 的 Tools 分頁）：
+  `cancel_order` 回 `{"destructiveHint":true,"idempotentHint":false}`，三個唯讀工具都回
+  `{"readOnlyHint":true}`。
+- **權限確認提示**：對訂單 1（Pending）呼叫 `cancel_order` 前，Claude Code 跳出確認提示，
+  使用者核准後才真正執行——驗證了「client 讀 annotations 決定要不要跳確認」這條規則。
+- **實測（訂單 1，Pending）**：取消前品項為 ProductId 44（qty 2, 庫存 98）、9（qty 1, 庫存
+  42）、32（qty 1, 庫存 4）。取消後查 DB：訂單狀態變 `Cancelled`（=3），庫存分別回補為
+  100 / 43 / 5——與扣掉的數量完全對應。
+- **拒絕路徑**：對同一筆訂單再呼叫一次 `cancel_order` → `取消失敗:狀態為 Cancelled 的
+  訂單不可取消`；對一筆 `Shipped` 訂單（Id=2）呼叫 → `取消失敗:狀態為 Shipped 的訂單
+  不可取消`。兩者都是清楚的文字訊息，不是 exception dump——agent 可以直接把這句話轉述
+  給使用者。
+- commit：`2e207cd`。
+
+練習 5 — Resources 與 Prompts
+
+- `OrderHubResources.cs`：`orderhub://discount-rules`（`text/markdown`），內容抄自
+  `OrderService` 的折扣規則說明。`OrderHubPrompts.cs`：`low_stock_report` prompt，帶
+  `threshold` 參數（預設 10），展開後引導 agent 先呼叫 `low_stock`、再查訂單狀況、最後
+  輸出採購建議表。`Program.cs` 加 `.WithResources<>()` / `.WithPrompts<>()`。
+- Resource 驗證：`resources/list` 讀到 `discount-rules`；`resources/read` 拿到完整
+  markdown。Claude Code 實測：我先用 `ReadMcpResourceTool` 讀出 resource 內容（等同
+  `@` 選取後放進 context），只憑這段文字答「Gold 會員買 1000 元商品應付多少？」→
+  正確答 900 元（9 折），沒有去看 `OrderService.cs`。
+- Prompt 驗證：`/mcp__orderhub__low_stock_report` 展開成範本裡寫的那段話（threshold=10），
+  接著我依範本指示呼叫 `low_stock(threshold=10)`，查到 5 個低庫存商品；因為現有工具都是
+  以訂單／客戶為 key、沒有「依商品查近期銷量」的工具，改用 `sqlcmd` 查最近 30 天（排除
+  Cancelled）銷量，湊出補貨建議表——這一步暴露了工具集的缺口，也符合文件說的
+  「prompt 引導 agent 用 tool，但 tool 不夠時 agent 得自己想辦法」。
+- **思考（5c 第 3 點）**：
+  - 折扣規則用 Resource 給，跟讓 agent 自己讀 `OrderService.cs`：Resource 是團隊共用、
+    版本統一的單一事實來源，任何 client 連上就拿得到，不需要 agent 有讀 codebase 的權限
+    或能力；讓 agent 自己讀程式碼則每次都要重新解析、還可能讀到跟目前部署版本不一致的
+    程式碼。代價是：Resource 內容是**另存一份**，`OrderService` 改規則時如果忘了同步更新
+    resource 字串，就會出現「文件說 9 折、程式碼已經改成 85 折」這種兩份真相（跟練習 1
+    「金額別自己算」是同一個教訓，只是這次錯的是說明文字而不是計算）。
+  - Prompt 範本放 server，跟每個人自己打一段話：範本放 server 等於把「怎麼問才問得好」
+    的知識沉澱、全隊共用、可版本控制；規則改版（例如低庫存門檻定義變了）只要改一個地方，
+    所有人下次執行就自動同步，不用靠口頭傳達或每個人各自記一份、各自打字時走樣。
+- commit：待下一步（連同這份 PROCESS.md 更新一起送出）。
+
 ---
 
 ## 附錄：值得留下的對話片段
