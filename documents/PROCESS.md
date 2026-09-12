@@ -345,6 +345,117 @@
      前一輪測試留下的 `dotnet run --project src/OrderHub.Web` 背景行程還占著輸出檔——
      跟活動 2 練習 3 遇到的殘留行程是同一個教訓，`taskkill` 掉舊行程再 build 就好。
 
+### 第四階段 — n8n 自動化(activity-4-n8n)
+
+> 前置：`npx n8n` 起本機 n8n(`http://localhost:5678`)。這階段把前三個活動的成果串成一條
+> 真實會動的自動化——沒有一次是「只跑一次確認流程通就好」,每個分支都逼自己準備真實素材
+> (真的取消一筆訂單、真的讓 GitHub Issues 關閉再打開)去踩一次真實錯誤,而不是紙上談兵。
+
+**補齊 — MCP server 加開 HTTP transport**(commit `7bdcd72`)
+
+- `OrderHub.Mcp.csproj` 加 `ModelContextProtocol.AspNetCore`(版本對齊既有的 `2.1.0`,不是
+  文件寫的 `2.0.0-preview.2`——舊 preview 版本已從套件源下架)+ `FrameworkReference` 到
+  `Microsoft.AspNetCore.App`。`Program.cs` 用 `args.Contains("--http")` 分岔:HTTP 版開
+  `WithHttpTransport(Stateless=true)` 監聽 `localhost:3001`,預設仍走 `WithStdioServerTransport()`。
+  工具/Resource/Prompt 註冊程式碼一行不用改,只是 transport 換了個殼。
+- 驗證:`npx @modelcontextprotocol/inspector --cli http://localhost:3001 --transport http --method tools/list`(以及 `resources/list`、`prompts/list`)都列得出四個工具、resource、prompt;
+  不帶 `--http` 時 stdio 版照舊,Claude Code 的 `/mcp` 一切正常。
+- 小插曲:Inspector CLI 的 `--transport` 值一開始猜成 `streamable-http`,被拒絕
+  (`Valid types are: sse, http, stdio`),改成 `http` 才對。
+
+**練習 1 — Hello Webhook**
+
+- workflow「Exercise 1 - Hello Webhook」:Webhook(POST `/webhook/hello`,Respond 選
+  **Using 'Respond to Webhook' Node**——這步最容易漏,漏了的話下游節點會被完全忽略)→
+  Edit Fields(加 `receivedAt={{ $now.toISO() }}`,**Include Other Input Fields=All**)→
+  Respond to Webhook(First Incoming Item)。
+- 驗證:Test URL 打入 `{"text":"hello"}`,回應同時含 `text: "hello"` 與 `receivedAt` 時間戳;
+  親身體會 Test URL(120 秒、一發即停)vs Production URL(Activate 後常駐)的差異——後面
+  練習 2 的通知節點就是打這條 Production URL。
+- Activate 這顆按鈕被 Claude Code 內部的權限分類器擋下(判定「Excess Sensitive Detail」),
+  改成我自己在瀏覽器上手動點,agent 事後才讀出 Production URL 繼續接練習 2。
+
+**練習 2 — 退單巡檢日報**(workflow「Exercise 2 - 退單巡檢日報」)
+
+- 流程:Schedule Trigger → HTTP Request(`POST /api/orders/search`,**Always Output Data**
+  打開,不開的話空結果會讓下游 0 item 全部跳過)→ Code 節點「整理筆數」(把 N 個訂單 item
+  併成一個 `{count, orders}`)→ AI Agent(Gemini `gemini-3.5-flash`,System Message 要求
+  「只根據提供的資料寫日報,不要編造數字」)→ IF(`count > 0`)→ true 開 GitHub issue +
+  webhook 通知練習 1,false 寫入 Data Table「巡檢紀錄」。
+- **第一次真實素材準備就踩了一個資料含義的坑**:直接在網站取消訂單 #6(建立於
+  2026-07-22)後,打 `/api/orders/search {"text":"過去 30 天取消的訂單"}` 仍回空陣列。
+  原因:Gemini 翻譯這句查詢時用的時間窗口是訂單的 `createdAt`(建立時間),不是「何時被取消」
+  ——系統沒有 `CancelledAt` 欄位。訂單 #6 建立於 52 天前,自然落在窗口外。修法:改成建一筆
+  **今天新建的訂單**(#202,王美玲·Silver·極光無線滑鼠 x1)再取消它,`createdAt` 才會落在
+  「過去 30 天」內,查詢才吃得到。
+- **真實跑 true 分支,連續踩兩個現實世界的錯誤(都不是程式錯誤)**:
+  1. `Create an issue` 節點回 `403 Forbidden - Resource not accessible by personal access
+     token`。修法:請使用者自己去 GitHub 換一顆有 `Issues: Read and write`(fine-grained)
+     或 `repo`(classic)scope 的 token,貼回 n8n 的 `GitHub account` credential——我沒有替
+     使用者輸入這顆 token,只給操作步驟。
+  2. token 換完後換一個新錯誤:`Issues has been disabled in this repository.`——GitHub
+     repo 層級的 Issues 功能本身被關掉,跟 token 權限無關。使用者自己到
+     repo Settings → Features 打開 Issues 才解決。
+  - 兩次錯誤都是**先看清楚 error message 的第二層意思**才對症下藥:第一個訊息裡的
+     「Forbidden」讓人直覺以為 token 換了就好,但真正卡住的是完全不同的一道關卡(repo 功能
+     開關)。教訓:GitHub API 的 403/422 有好幾種完全不同的根因,訊息文字要整句讀完,
+     不要看到「權限」兩個字就只往 token 一個方向修。
+  - 最終成功建立真實 issue:[#1](https://github.com/xiaoming0061/61-training/issues/1)
+    (標題「【退單巡檢日報】今日新增 1 筆取消訂單,總金額為 1,349 元,客戶為銀卡會員王美玲。」),
+    HTTP Request1 打練習 1 的 Production URL 拿到回應 `receivedAt: 2026-09-12T06:02:36...`,
+    證明整條「開 issue → 收通知」真的跑通,不是只有畫布上的假勾勾。
+- **false 分支(查不到東西)也刻意真實測過兩次**:第一次是全新資料庫尚未有「近 30 天」內
+  取消紀錄時的自然結果(false 分支跑到 Data Table 寫入「本日無退單」);第二次是刻意把
+  HTTP Request 的查詢文字換成「昨天取消的訂單」(此時確實有一筆今天取消的訂單 #202,若查詢
+  邏輯有誤,這條件應該仍會誤判成有結果)——實測 IF 走 false、`Insert row` 輸出 1 item、
+  `Create an issue` 完全沒有執行,GitHub 上也確認沒有新 issue,兩個分支都拿到真陽性/真陰性
+  的證據,不是只跑一次「剛好」。
+- 思考題:如果「查什麼、怎麼查」也交給 AI Agent 自由發揮,會失去什麼?
+  - **活動 3 的白名單防線**:`/api/orders/search` 背後的 `OrderSearchService` 有兩層白名單
+    (`OrderSearchQuery` 的合法欄位 + 翻譯結果沒有任何有效條件一律拒絕),擋住「幫我把所有
+    訂單刪掉」這類指令被誤譯成危險查詢。如果讓 AI Agent 自己決定怎麼查(例如自己組 SQL 或
+    自己呼叫更底層的 API),這兩層白名單就繞過去了,巡檢流程從「唯讀查詢」變成「AI 想怎麼查
+    就怎麼查」,攻擊面直接變大。
+  - **可測試性**:現在的查詢邏輯集中在一個受版本控制、有單元測試覆蓋的 service(活動 3
+    練習 1 的四條驗證),n8n 只是呼叫它。如果查詢邏輯也丟給 agent 臨場發揮,同一句「過去
+    30 天取消的訂單」每次執行可能翻成不同的實際查詢,今天測過對的東西,明天不保證還對。
+  - **日報數字的可信度**:System Message 要求「只根據提供的資料寫日報,不要編造數字」,
+    這句話能生效的前提是「提供的資料」本身是**同一個決定性、可重現**的查詢結果。如果連
+    「查什麼」都交給 AI 自由心證,日報的筆數/金額就變成「AI 這次剛好想到查這些」,沒辦法
+    拿去跟 `/Orders` 頁面篩選結果做肉眼比對——這正是這次驗證方式的基礎(「日報數字和
+    `/Orders` 頁面篩「已取消」肉眼比對一致」),失去查詢的決定性,這條驗證方式就整個垮掉。
+
+**練習 3 — MCP 合體(get_order 深挖)**
+
+- AI Agent 掛 **MCP Client Tool**:Endpoint `http://localhost:3001`、HTTP Streamable、
+  Tools to Include 只勾 `get_order`——`cancel_order`(會改資料)絕不掛進這條無人值守的排程
+  流程,是活動 1 approval 哲學在這裡的具體形狀:不是「掛上去但預設不執行」,是「根本不給
+  這個工具」。
+- 真實驗證(對訂單 #202 深挖):日報引用了 `get_order` 才可能查到的品項明細——
+  「「極光 無線滑鼠」 x 1(單價:1,420.00 元)、小計 1,420.00 元、會員折扣 5%、應付總額
+  1,349.00 元」。這點很關鍵:`/api/orders/search` 的回應只有 `id/customerName/tier/status/
+  total/createdAt` 六欄,**完全不含品項**,所以日報裡出現的品項名稱、單價、折扣率,只能是
+  agent 真的呼叫了 `get_order` 才拿得到的資訊——不是我用肉眼看畫布上的勾勾判斷,是資料本身
+  的來源反推出來的證據。
+- **有深挖 vs 沒深挖,對照同一批訂單(#202)的日報差異**(把 MCP Client 節點暫時
+  Deactivate,同樣的資料重跑一次,再重新 Activate):
+  - **沒深挖**(Tool 停用,n8n 自己提示「None of your tools were used in this run」):
+    > 2026-09-12 退單巡檢:新增 1 筆取消訂單,總金額 1,349 元
+    > * 總筆數:1 筆
+    > * 總金額:1,349 元
+    > * 值得注意的訂單:訂單編號 #202:會員「王美玲」(會員等級:Silver),取消金額 1,349 元。
+  - **有深挖**(Tool 啟用):在上面的基礎上,多了完整的「取消訂單明細」段落——具體品項
+    「極光 無線滑鼠」、數量、單價 1,420 元、小計、5% 會員折扣、應付總額——把同一筆訂單從
+    「知道總額」升級成「知道總額怎麼算出來的」。
+  - 差異的本質:沒有 MCP 深挖時,AI Agent 只能轉述 `/api/orders/search` 給的六個欄位;
+    有 MCP 深挖時,AI Agent 會主動針對每一筆退單再呼叫 `get_order` 補齊細節。對「巡檢日報」
+    這個場景,深挖版本才能回答「這筆退單退的是什麼、退多少錢的哪些商品」,對追根究柢的人
+    (例如要判斷是不是特定商品退貨率異常)有實質差異。
+  - 小插曲(副作用):這次「關掉 Tool 重跑」的比較測試,因為 count 仍然 > 0,真的又開了一顆
+    真實 GitHub issue([#2](https://github.com/xiaoming0061/61-training/issues/2))——這是
+    刻意重跑整條 workflow 才能拿到「同一批訂單、有無深挖」的真實對照組所付出的代價,沒有
+    刻意去清理它,保留下來當作「重跑會有真實副作用」的具體例子。
+
 ---
 
 ## 附錄：值得留下的對話片段
